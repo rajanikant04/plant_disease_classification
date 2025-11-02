@@ -1,7 +1,20 @@
 import math
 import torch
 import torch.nn.functional as F
-from einops import rearrange
+try:
+    from einops import rearrange
+except ImportError:
+    # Fallback implementation if einops is not available
+    def rearrange(tensor, pattern, **kwargs):
+        if pattern == "b (w h) c -> b c w h":
+            w, h = kwargs.get('w'), kwargs.get('h')
+            B, WH, C = tensor.shape
+            return tensor.view(B, w, h, C).permute(0, 3, 1, 2)
+        elif pattern == "b c w h -> b (w h) c":
+            B, C, W, H = tensor.shape
+            return tensor.permute(0, 2, 3, 1).view(B, W*H, C)
+        else:
+            return tensor  # Simple fallback
 from torch import nn
 from .deform_conv_v3 import DeformConv2d
 from .CrossAttention import FusionEncoder
