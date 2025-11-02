@@ -77,10 +77,17 @@ def run_experiment():
     
     # Check if dataset path exists
     if not os.path.exists(DATASET_PATH):
-        print("❌ Dataset not found! Please update DATASET_PATH in config.py")
+        print("❌ Dataset not found! Please update DATASET_PATH in config")
         print(f"Current path: {DATASET_PATH}")
-        print("📝 Update DATASET_PATH variable to point to your dataset directory")
-        return
+        print("📝 Available paths in /kaggle/input:")
+        try:
+            if os.path.exists("/kaggle/input"):
+                for item in os.listdir("/kaggle/input"):
+                    print(f"  - /kaggle/input/{item}")
+        except:
+            pass
+        print("💡 Update DATASET_PATH to match one of the above paths")
+        return None
     
     print("✅ Dataset path found!")
     print(f"📁 Dataset path: {DATASET_PATH}")
