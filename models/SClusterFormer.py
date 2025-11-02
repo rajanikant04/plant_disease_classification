@@ -3,9 +3,7 @@ import torch
 import torch.nn.functional as F
 from einops import rearrange
 from torch import nn
-from .FS_Attention import FreqSpectralAttentionLayer
 from .deform_conv_v3 import DeformConv2d
-from .Pseudo3DDeformConv import DeformConv3d
 from .CrossAttention import FusionEncoder
 
 
@@ -267,68 +265,8 @@ class Block2D(nn.Module):
         return x
 
 """
-    Here we have updated the implementation of multi-scale operations, achieving refined feature extraction through a lighter-weight shared weight approach.
+    Simplified multi-scale deformable convolution for RGB images
 """
-class MultiScaleDeformConv3D_FSA(nn.Module):
-    def __init__(self, deform_conv: nn.Module, kernel_sizes=[3, 5, 7]):
-        super().__init__()
-        self.kernel_sizes = kernel_sizes
-        self.deform_conv = deform_conv
-        self.out_channels = deform_conv.outc * 30
-
-        self.scale_convs = nn.ModuleList([
-            nn.Conv3d(deform_conv.outc, deform_conv.outc, kernel_size=1, groups=deform_conv.outc)
-            for _ in kernel_sizes
-        ])
-
-        self.fuse = nn.Conv3d(
-            deform_conv.outc * len(kernel_sizes),
-            deform_conv.outc,
-            kernel_size=1
-        )
-
-        self.attention = FreqSpectralAttentionLayer(
-            channel=self.out_channels,
-            dct_h=kernel_sizes[-1],
-            dct_w=kernel_sizes[-1],
-            reduction=16,
-            freq_sel_method='top2'
-        )
-
-    def forward(self, x):
-        B, C, D, H, W = x.shape
-        feat_base = self.deform_conv(x)
-        feats = []
-        for idx, k in enumerate(self.kernel_sizes):
-            if k == self.kernel_sizes[0]:
-                feat_scaled = feat_base
-            else:
-                scale = k / self.kernel_sizes[0]
-                feat_scaled = F.avg_pool3d(
-                    feat_base,
-                    kernel_size=(1, int(scale), int(scale)),
-                    stride=(1, int(scale), int(scale)),
-                    ceil_mode=True
-                )
-                feat_scaled = F.interpolate(
-                    feat_scaled, size=(D, H, W),
-                    mode='trilinear', align_corners=False
-                )
-
-            feat_scaled = self.scale_convs[idx](feat_scaled)
-            feats.append(feat_scaled)
-
-        multi_scale = torch.cat(feats, dim=1)
-        multi_scale = self.fuse(multi_scale)
-
-        out = feat_base + multi_scale
-
-        B, Ck, D, H, W = out.shape
-        out_4d = out.view(B, Ck * D, H, W)
-        out_attn = self.attention(out_4d)
-        out_final = out_attn.view(B, Ck, D, H, W)
-
-        return out_final
 
 
 
@@ -361,28 +299,28 @@ class MultiScaleDeformConv2D(nn.Module):
 
 
 class SClusterFormer(nn.Module):
-    def __init__(self, img_size=224, pca_components=3, emap_components=1, num_classes=1000, num_stages=3,
+    def __init__(self, img_size=224, input_channels=3, num_classes=1000, num_stages=3,
                  n_groups=[32, 32, 32], embed_dims=[256, 128, 64], num_heads=[8, 8, 8], mlp_ratios=[1, 1, 1],
                  depths=[2, 2, 2], patchsize=17):
         super().__init__()
-        self.reducedbands = pca_components
+        self.input_channels = input_channels
         self.num_stages = num_stages
+        self.img_size = img_size
 
-        new_bands = math.ceil(pca_components / n_groups[0]) * n_groups[0]
-        self.pad = nn.ReplicationPad3d((0, 0, 0, 0, 0, new_bands - pca_components))
+        # For RGB images, we don't need padding like hyperspectral data
+        # new_bands = math.ceil(input_channels / n_groups[0]) * n_groups[0]
+        # self.pad = nn.ReplicationPad3d((0, 0, 0, 0, 0, new_bands - input_channels))
 
-        """MDC-FSA"""
-        deform_conv_shared = DeformConv3d(inc=1, outc=1, kernel_size=3, padding=1, bias=False, modulation=True)
-        self.deform_conv_layer_pca = MultiScaleDeformConv3D_FSA(deform_conv_shared)
-
-        deform_conv_shared_emap = DeformConv2d(inc=emap_components, outc=30, kernel_size=9, padding=1, bias=False, modulation=True)
-        self.deform_conv_layer_emap = MultiScaleDeformConv2D(deform_conv_shared_emap)
+        """MDC for RGB Images"""
+        # Single deformable convolution for RGB feature extraction
+        deform_conv_rgb = DeformConv2d(inc=input_channels, outc=64, kernel_size=3, padding=1, bias=False, modulation=True)
+        self.deform_conv_layer_rgb = MultiScaleDeformConv2D(deform_conv_rgb)
 
         """Upper Branch"""
         for i in range(num_stages):
             patch_embed = GroupedPixelEmbedding(
                 in_feature_map_size=img_size,
-                in_chans=new_bands if i == 0 else embed_dims[i - 1],
+                in_chans=64 if i == 0 else embed_dims[i - 1],  # 64 from deform conv output
                 embed_dim=embed_dims[i],
                 n_groups=n_groups[i]
             )
@@ -405,7 +343,7 @@ class SClusterFormer(nn.Module):
         for i in range(num_stages):
             patch_embed2d = PixelEmbedding(
                 in_feature_map_size=img_size if i == 0 else self.embed_img[i - 1],
-                in_chans=new_bands if i == 0 else embed_dims[i - 1],
+                in_chans=64 if i == 0 else embed_dims[i - 1],  # 64 from deform conv output
                 embed_dim=embed_dims[i],
                 n_groups=n_groups[i],
                 i=i
@@ -442,7 +380,7 @@ class SClusterFormer(nn.Module):
         )
 
     def forward_features_Upper(self, x):
-        x = self.pad(x).squeeze(dim=1)
+        # x is already 2D RGB features from deform conv
         B = x.shape[0]
 
         for i in range(self.num_stages):
@@ -462,7 +400,7 @@ class SClusterFormer(nn.Module):
         return x
 
     def forward_features_Lower(self, x):
-        x = self.pad(x).squeeze(dim=1)
+        # x is already 2D RGB features from deform conv
         B = x.shape[0]
 
         for i in range(self.num_stages):
@@ -483,30 +421,33 @@ class SClusterFormer(nn.Module):
 
 
     def forward(self, x):
-        x1_pca = x[:, :, :self.reducedbands, :, :]
-        x1_pca = self.deform_conv_layer_pca(x1_pca)
-        x1_pca = x1_pca[:, :self.reducedbands, :, :]
-
-        x_scluster = self.forward_features_Upper(x1_pca)
-
-        x_emap = x[:, :, self.reducedbands, :, :]
-        x_emap = self.deform_conv_layer_emap(x_emap)
-        x_emap = torch.unsqueeze(x_emap, dim=1)
-
-        x_emap = self.forward_features_Lower(x_emap)
-
-        x_cfpf = self.fusion_encoder(x_scluster, x_emap)
-
-        x_cfpf = x_cfpf.mean(dim=1)
-        x_scluster = x_scluster.mean(dim=1)
-        x_emap = x_emap.mean(dim=1)
-
-        x_scluster = self.head(x_scluster)
-        x_emap = self.head(x_emap)
-        x_cfpf = self.head(x_cfpf)
-
-        x = x_emap * ((1 - self.coefficients) / 2) + x_cfpf * (
-                (1 - self.coefficients) / 2) + x_scluster * self.coefficients
-
+        # x shape: [B, C, H, W] where C=3 for RGB images
+        
+        # Apply deformable convolution for feature extraction
+        x_deform = self.deform_conv_layer_rgb(x)
+        
+        # Upper branch processing
+        x_upper = self.forward_features_Upper(x_deform)
+        
+        # Lower branch processing (using same features)
+        x_lower = self.forward_features_Lower(x_deform)
+        
+        # Cross-feature fusion
+        x_fused = self.fusion_encoder(x_upper, x_lower)
+        
+        # Global average pooling
+        x_fused = x_fused.mean(dim=1)
+        x_upper = x_upper.mean(dim=1)
+        x_lower = x_lower.mean(dim=1)
+        
+        # Classification heads
+        x_upper_out = self.head(x_upper)
+        x_lower_out = self.head(x_lower)
+        x_fused_out = self.head(x_fused)
+        
+        # Ensemble prediction
+        x = x_lower_out * ((1 - self.coefficients) / 2) + x_fused_out * (
+                (1 - self.coefficients) / 2) + x_upper_out * self.coefficients
+        
         return x
 

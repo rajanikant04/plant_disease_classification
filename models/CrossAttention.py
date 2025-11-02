@@ -85,7 +85,8 @@ class CT_Transformer(nn.Module):
 class FusionEncoder(nn.Module):
     def __init__(self, depth, h_dim, ct_attn_heads, ct_attn_depth, dropout=0.1, patchsize=13):
         super().__init__()
-        self.pojo = nn.Conv1d(16, patchsize**2, kernel_size=1, stride=1)
+        # Fixed: Use h_dim instead of hardcoded 16
+        self.pojo = nn.Conv1d(h_dim, patchsize**2, kernel_size=1, stride=1)
         self.layers = nn.ModuleList([])
         for _ in range(depth):
             self.layers.append(
