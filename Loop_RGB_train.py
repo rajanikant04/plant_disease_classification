@@ -100,6 +100,13 @@ def train_rgb_sclusterformer(hyperparameters):
     optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
     
+    # Memory optimization
+    if device.type == 'cpu' or not torch.cuda.is_available():
+        print("🔧 CPU mode: Using memory optimizations")
+        # Enable gradient checkpointing for memory efficiency
+        if hasattr(model, 'gradient_checkpointing_enable'):
+            model.gradient_checkpointing_enable()
+    
     # Training
     print(f"\nStarting training for {epochs} epochs...")
     start_time = time.time()
@@ -115,6 +122,12 @@ def train_rgb_sclusterformer(hyperparameters):
         correct = 0
         total = 0
         
+        # Memory cleanup at start of epoch
+        if epoch % 2 == 0:  # Every 2 epochs
+            torch.cuda.empty_cache() if torch.cuda.is_available() else None
+            import gc
+            gc.collect()
+        
         for batch_idx, (images, labels) in enumerate(train_loader):
             images, labels = images.to(device), labels.to(device)
             
@@ -128,6 +141,13 @@ def train_rgb_sclusterformer(hyperparameters):
             _, predicted = outputs.max(1)
             total += labels.size(0)
             correct += predicted.eq(labels).sum().item()
+            
+            # Delete intermediate tensors to save memory
+            del outputs, loss
+            
+            # Periodic memory cleanup during training
+            if batch_idx % 10 == 0 and batch_idx > 0:
+                torch.cuda.empty_cache() if torch.cuda.is_available() else None
         
         epoch_loss = running_loss / len(train_loader)
         epoch_acc = 100. * correct / total

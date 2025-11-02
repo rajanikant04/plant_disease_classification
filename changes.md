@@ -107,3 +107,16 @@ dataset/
 - **Hyperspectral images**: 100-200+ spectral bands → Spectral attention finds important wavelengths
 - **RGB images**: Only 3 channels (R,G,B) → No meaningful spectral relationships
 - **Result**: Simpler, more efficient model for RGB plant disease classification
+
+
+Complete RGB plant disease classification adaptation
+
+- Adapted SClusterFormer from hyperspectral to RGB input (224x224x3)
+- Added RGB data loader with train/val splitting
+- Created Loop_RGB_train.py for RGB-specific training
+- Updated main.py to use RGB pipeline
+- Fixed dimension compatibility issues
+- Added kaggle_simple.py for easy Kaggle deployment
+- Removed hyperspectral-specific files (EMAP, geniter, util)
+- Added configuration system (config.py)
+- Ready for plant disease classification on RGB images
