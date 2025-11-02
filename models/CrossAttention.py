@@ -94,8 +94,18 @@ class FusionEncoder(nn.Module):
             )
 
     def forward(self, h_tokens, l_tokens):
+        # Ensure l_tokens has the right shape for Conv1d: [B, C, L]
+        if l_tokens.dim() == 3:  # [B, L, C] -> [B, C, L]
+            l_tokens = l_tokens.transpose(1, 2)
+        
         l_tokens = self.pojo(l_tokens)
-        h_tokens = torch.concat((h_tokens, l_tokens), dim=0)
+        
+        # Transpose back to [B, L, C] for concatenation
+        if l_tokens.dim() == 3:
+            l_tokens = l_tokens.transpose(1, 2)
+        
+        # Concatenate along sequence dimension (dim=1)
+        h_tokens = torch.concat((h_tokens, l_tokens), dim=1)
 
         for cross_attend in self.layers:
             h_tokens = cross_attend(h_tokens)

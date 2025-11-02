@@ -15,10 +15,16 @@ print("="*40)
 device = "cpu"  # Use CPU to avoid GPU memory issues
 print(f"Using device: {device}")
 
-# Install minimal packages
-print("📦 Installing packages...")
-subprocess.check_call([sys.executable, "-m", "pip", "install", "torch==2.0.1+cpu", "torchvision==0.15.2+cpu", "-f", "https://download.pytorch.org/whl/torch_stable.html", "--quiet"])
-subprocess.check_call([sys.executable, "-m", "pip", "install", "einops", "scikit-learn", "--quiet"])
+# Install compatible packages
+print("📦 Installing compatible packages...")
+try:
+    # Use default PyTorch versions that come with Kaggle
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "torch", "torchvision", "--upgrade", "--quiet"])
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "einops", "scikit-learn", "--quiet"])
+    print("✅ Using Kaggle's default PyTorch")
+except Exception as e:
+    print(f"⚠️ Package installation warning: {e}")
+    print("Proceeding with existing packages...")
 
 ## 📥 Clone Repository
 
@@ -83,30 +89,66 @@ gc.collect()
 os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:32'
 os.environ['OMP_NUM_THREADS'] = '2'  # Limit CPU threads
 
-print("🚀 Starting memory-optimized training...")
-
-try:
-    # Import and run directly to avoid subprocess overhead
-    sys.path.insert(0, os.getcwd())
+def run_training():
+    """Run training with multiple fallback approaches"""
+    print("🚀 Starting memory-optimized training...")
     
-    # Set torch to use minimal memory
-    torch.set_num_threads(2)
-    
-    # Import main module
-    import main
-    
-    print("Running main.py with minimal memory usage...")
-    result = main.run_experiment()
-    
-    if result is not None:
-        print("✅ Training completed successfully!")
-    else:
-        print("⚠️ Training completed with warnings")
+    try:
+        # Import and run directly to avoid subprocess overhead
+        sys.path.insert(0, os.getcwd())
         
-except Exception as e:
-    print(f"❌ Training error: {e}")
-    import traceback
-    traceback.print_exc()
+        # Set torch to use minimal memory
+        torch.set_num_threads(2)
+        
+        # Try importing main module with error handling
+        print("Importing modules...")
+        try:
+            import main
+        except ImportError as ie:
+            print(f"❌ Import error: {ie}")
+            print("Trying to run with subprocess instead...")
+            
+            # Fallback to subprocess if direct import fails
+            result = subprocess.run([sys.executable, "main.py"], 
+                                  capture_output=True, text=True, timeout=1800)
+            
+            if result.returncode == 0:
+                print("✅ Training completed via subprocess!")
+                print("Last few lines of output:")
+                for line in result.stdout.split('\n')[-10:]:
+                    if line.strip():
+                        print(f"  {line}")
+            else:
+                print("❌ Subprocess also failed")
+                print("Error:", result.stderr[-500:])  # Last 500 chars
+            return
+        
+        print("Running main.py with minimal memory usage...")
+        result = main.run_experiment()
+        
+        if result is not None:
+            print("✅ Training completed successfully!")
+        else:
+            print("⚠️ Training completed with warnings")
+            
+    except Exception as e:
+        print(f"❌ Training error: {e}")
+        print("Trying fallback approach...")
+        
+        # Final fallback - try subprocess
+        try:
+            result = subprocess.run([sys.executable, "main.py"], 
+                                  capture_output=True, text=True, timeout=1200)
+            if result.returncode == 0:
+                print("✅ Fallback training succeeded!")
+            else:
+                print("❌ All methods failed")
+                print("Final error:", result.stderr[-300:])
+        except Exception as final_e:
+            print(f"❌ Final fallback failed: {final_e}")
+
+# Run the training
+run_training()
 
 # Clean up
 gc.collect()

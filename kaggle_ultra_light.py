@@ -51,25 +51,25 @@ if os.path.exists("/kaggle/input"):
             print(f"🎯 Auto-selected: {DATASET_PATH}")
             break
 
-# Create ultra-lightweight config
+# Create ultra-lightweight config for your dataset
 print("⚙️ Creating minimal config...")
-config_content = f'''# Ultra-lightweight Kaggle config
-DATASET_PATH = "{DATASET_PATH}"
-USE_VALIDATION_SPLIT = True
+config_content = f'''# Ultra-lightweight Kaggle config for apple-disease-dataset
+DATASET_PATH = "{DATASET_PATH}/datasets"  # Point to datasets folder  
+USE_VALIDATION_SPLIT = False  # Use pre-split train/test folders
 TRAIN_RATIO = 0.8
 RUN_TIMES = 1
-IMG_SIZE = 128          # Reduced image size
-BATCH_SIZE = 8          # Very small batch
+IMG_SIZE = 96           # Very small image size (96x96)
+BATCH_SIZE = 4          # Tiny batch size
 EPOCHS = 10             # Quick training
 LEARNING_RATE = 0.001
 INPUT_CHANNELS = 3
-CUDA_DEVICES = [0]
+CUDA_DEVICES = [0] if __import__('torch').cuda.is_available() else []
 MODEL_CONFIG = {{
-    "num_stages": 1,         # Minimal model
-    "n_groups": [4],         # Very small
-    "embed_dims": [64],      # Minimal dimensions
-    "num_heads": [2],        # Few heads
-    "mlp_ratios": [2],       # Small MLP
+    "num_stages": 1,         # Single stage only
+    "n_groups": [2],         # Minimal groups
+    "embed_dims": [32],      # Very small dimensions
+    "num_heads": [1],        # Single attention head
+    "mlp_ratios": [1],       # No MLP expansion
     "depths": [1],           # Single layer
 }}
 '''

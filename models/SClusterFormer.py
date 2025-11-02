@@ -208,10 +208,15 @@ class Cluster2D(nn.Module):
 
 
 class GroupedPixelEmbedding(nn.Module):
-    def __init__(self, in_feature_map_size=7, in_chans=3, embed_dim=128, n_groups=1):
+    def __init__(self, in_feature_map_size=7, in_chans=3, embed_dim=128, n_groups=1, i=0):
         super().__init__()
         self.ifm_size = in_feature_map_size
-        self.proj = nn.Conv2d(in_chans, embed_dim, kernel_size=3, stride=1, padding=1, groups=n_groups)
+        # Use stride>1 for spatial dimension reduction, especially for first stages
+        kernel_size = 4 if i == 0 else 3
+        stride = 4 if i == 0 else 2  # Aggressive downsampling
+        padding = 0 if i == 0 else 1
+        
+        self.proj = nn.Conv2d(in_chans, embed_dim, kernel_size=kernel_size, stride=stride, padding=padding, groups=n_groups)
         self.batch_norm = nn.BatchNorm2d(embed_dim)
         self.relu = nn.ReLU(inplace=True)
 
@@ -219,9 +224,10 @@ class GroupedPixelEmbedding(nn.Module):
         x = self.proj(x)
         x = self.relu(self.batch_norm(x))
 
+        # Calculate actual output size after convolution
+        after_feature_map_size = x.shape[2]  # Height (assuming square)
+        
         x = x.flatten(2).transpose(1, 2)
-
-        after_feature_map_size = self.ifm_size
 
         return x, after_feature_map_size
 
@@ -230,8 +236,12 @@ class PixelEmbedding(nn.Module):
     def __init__(self, in_feature_map_size=7, in_chans=3, embed_dim=128, n_groups=1, i=0):
         super().__init__()
         self.ifm_size = in_feature_map_size
-        self.proj = nn.Conv2d(in_chans, embed_dim, kernel_size=3, stride=1 if i == 0 else 2,
-                              padding=1 if i == 0 else (3 // 2, 3 // 2))
+        # Use larger stride and kernel for dimension reduction
+        kernel_size = 4 if i == 0 else 3
+        stride = 4 if i == 0 else 2  # More aggressive downsampling
+        padding = 0 if i == 0 else 1
+        
+        self.proj = nn.Conv2d(in_chans, embed_dim, kernel_size=kernel_size, stride=stride, padding=padding)
         self.batch_norm = nn.BatchNorm2d(embed_dim)
         self.relu = nn.ReLU(inplace=True)
 
@@ -335,7 +345,8 @@ class SClusterFormer(nn.Module):
                 in_feature_map_size=img_size,
                 in_chans=64 if i == 0 else embed_dims[i - 1],  # 64 from deform conv output
                 embed_dim=embed_dims[i],
-                n_groups=n_groups[i]
+                n_groups=n_groups[i],
+                i=i  # Pass stage index for stride calculation
             )
 
             block = nn.ModuleList([Block(
@@ -378,13 +389,28 @@ class SClusterFormer(nn.Module):
         """CFAF"""
         self.coefficients = torch.nn.Parameter(torch.Tensor([0.7]))
 
+        # Calculate actual patch size based on image size and model stages
+        # After deform conv and multiple stages, estimate final feature map size
+        final_size = img_size
+        for i in range(num_stages):
+            # Each stage with stride 2 reduces size by half (except first)
+            if i > 0:
+                final_size = final_size // 2
+        
+        # Ensure minimum size
+        actual_patchsize = max(final_size, 4)
+        
+        # Add adaptive pooling to control sequence length for memory efficiency
+        self.max_sequence_length = 64  # Limit to 64 patches
+        self.adaptive_pool = nn.AdaptiveAvgPool1d(self.max_sequence_length)
+        
         self.fusion_encoder = FusionEncoder(
             depth=1,
-            h_dim=64,
-            ct_attn_heads=4,
+            h_dim=embed_dims[-1],  # Use the last stage embed_dim
+            ct_attn_heads=min(4, embed_dims[-1] // 16),  # Adjust heads based on dimension
             ct_attn_depth=1,
             dropout=0.1,
-            patchsize=patchsize
+            patchsize=actual_patchsize
         )
 
         self.head = nn.Sequential(
@@ -444,6 +470,13 @@ class SClusterFormer(nn.Module):
         
         # Lower branch processing (using same features)
         x_lower = self.forward_features_Lower(x_deform)
+        
+        # Apply adaptive pooling to control sequence length before fusion
+        # x_upper: [B, N, C] -> [B, C, N] -> [B, C, max_seq] -> [B, max_seq, C]
+        if x_upper.size(1) > self.max_sequence_length:
+            x_upper = self.adaptive_pool(x_upper.transpose(1, 2)).transpose(1, 2)
+        if x_lower.size(1) > self.max_sequence_length:
+            x_lower = self.adaptive_pool(x_lower.transpose(1, 2)).transpose(1, 2)
         
         # Cross-feature fusion
         x_fused = self.fusion_encoder(x_upper, x_lower)
